@@ -1,5 +1,7 @@
+name: "synopkg"
 on:
   # Run whenever a pull request is updated
+  workflow_dispatch:
   pull_request:
     branches:
       - main
