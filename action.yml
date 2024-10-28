@@ -1,0 +1,306 @@
+name: 'Synopkg: Synchronise monorepo dependency versions'
+description: 'Always use the same versions of each dependency'
+
+branding:
+  icon: 'cloud-lightning'
+  color: 'green'
+
+inputs:
+  bot-email:
+    description: 'GitHub Email for the Synopkg Bot'
+    required: false
+    default: 'github-actions@github.com'
+  bot-username:
+    description: 'GitHub Username for the Synopkg Bot'
+    required: false
+    default: 'github-actions[bot]'
+  commit-message:
+    description: 'Commit Message to use when applying fixes'
+    required: false
+    default: 'chore(synopkg): format and sync package.json files'
+  format-mismatches:
+    description: '"fix" | "ignore"'
+    required: false
+    default: 'fix'
+  lockfile-mismatches:
+    description: '"fix" | "ignore"'
+    required: false
+    default: 'fix'
+  package-manager-version:
+    description: 'The Semver version of npm, yarn, or pnpm'
+    required: false
+    default: 'latest'
+  package-manager:
+    description: 'Possible values npm | yarn | pnpm'
+    required: false
+    default: 'npm'
+  semver-range-mismatches:
+    description: '"lint" | "fix" | "ignore"'
+    required: false
+    default: 'fix'
+  synopkg-version:
+    description: 'The Semver version of synopkg'
+    required: false
+    default: '7.2.1'
+  version-mismatches:
+    description: '"lint" | "fix" | "ignore"'
+    required: false
+    default: 'fix'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Init
+      id: init
+      shell: bash
+      run: |
+        if [ "${{ inputs.version-mismatches }}" = "fix" ] || [ "${{ inputs.format-mismatches }}" = "fix" ] || [ "${{ inputs.semver-range-mismatches }}" = "fix" ]; then
+          echo "anyFixEnabled=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install Synopkg
+      id: install-synopkg
+      shell: bash
+      run: |
+        npm i -g "synopkg@${{ inputs.synopkg-version }}"
+
+    - if: ${{ steps.init.outputs.anyFixEnabled == 'true' }}
+      name: Checkout Branch
+      id: checkout-branch
+      shell: bash
+      run: |
+        git config pull.rebase true
+        git fetch
+        git checkout $GITHUB_HEAD_REF
+        git pull origin $GITHUB_HEAD_REF
+
+    # Version Mismatches
+    # https://github.com/synopkg/synopkg#list-mismatches
+    # https://github.com/synopkg/synopkg#fix-mismatches
+
+    - if: ${{ inputs.version-mismatches == 'fix' }}
+      name: synopkg fix-mismatches
+      id: version-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(synopkg fix-mismatches)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    # Format Mismatches
+    # https://github.com/synopkg/synopkg#format
+
+    - if: ${{ inputs.format-mismatches == 'fix' }}
+      name: synopkg format
+      id: format-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(synopkg format)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    # Semver Range Mismatches
+    # https://github.com/synopkg/synopkg#lint-semver-ranges
+    # https://github.com/synopkg/synopkg#set-semver-ranges
+
+    - if: ${{ inputs.semver-range-mismatches == 'fix' }}
+      name: synopkg set-semver-ranges
+      id: semver-range-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(synopkg set-semver-ranges)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    - if: ${{ inputs.lockfile-mismatches != 'ignore' }}
+      name: Update Lockfile
+      id: lockfile-mismatches-fix
+      shell: bash
+      run: |
+        if [ "${{ inputs.package-manager }}" = "yarn" ]; then
+          npm i -g "yarn@${{ inputs.package-manager-version }}"
+          yarn install
+        elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+          npm i -g "pnpm@${{ inputs.package-manager-version }}"
+          pnpm install --no-frozen-lockfile
+        else
+          npm i -g "npm@${{ inputs.package-manager-version }}"
+          npm install
+        fi
+
+    - if: ${{ steps.init.outputs.anyFixEnabled == 'true' }}
+      name: Detect Changes
+      id: detect-changes
+      shell: bash
+      run: |
+        if [[ `git status --porcelain` ]]; then
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    - if: ${{ steps.init.outputs.anyFixEnabled == 'true' }}
+      name: Commit and Push
+      id: commit-and-push
+      shell: bash
+      run: |
+        if [ "${{ steps.detect-changes.outputs.has-changes }}" = "true" ]; then
+          git add .
+          git config user.name "${{ inputs.bot-username }}"
+          git config user.email "${{ inputs.bot-email }}"
+          git commit -m "${{ inputs.commit-message }}"
+          git push origin HEAD:"$GITHUB_HEAD_REF"
+          git push
+        fi
+
+    - if: always()
+      name: synopkg list-mismatches
+      id: version-mismatches-lint
+      shell: bash
+      run: |
+        if [ "${{ inputs.version-mismatches }}" = "lint" ]; then
+          set +e
+          value="$(synopkg list-mismatches)"
+          value="${value//'%'/'%25'}"
+          value="${value//$'\n'/'%0A'}"
+          value="${value//$'\r'/'%0D'}"
+          echo "stdout=$value" >> $GITHUB_OUTPUT
+          set -e
+          synopkg list-mismatches
+        fi
+
+    - if: always()
+      name: synopkg lint-semver-ranges
+      id: semver-range-mismatches-lint
+      shell: bash
+      run: |
+        if [ "${{ inputs.semver-range-mismatches }}" = "lint" ]; then
+          set +e
+          value="$(synopkg lint-semver-ranges)"
+          value="${value//'%'/'%25'}"
+          value="${value//$'\n'/'%0A'}"
+          value="${value//$'\r'/'%0D'}"
+          echo "stdout=$value" >> $GITHUB_OUTPUT
+          set -e
+          synopkg lint-semver-ranges
+        fi
+
+    - if: always()
+      name: Get Comment Body
+      id: get-comment-body
+      shell: bash
+      run: |
+        touch comment.txt
+        if [ "${{ inputs.version-mismatches }}" = "lint" ]; then
+          if [ "${{ steps.version-mismatches-lint.outcome }}" = "success" ]; then
+            echo '```' >> comment.txt
+            echo "$ synopkg list-mismatches" >> comment.txt
+            echo "✓" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+          if [ "${{ steps.version-mismatches-lint.outcome }}" = "failure" ]; then
+            echo "" >> comment.txt
+            echo '```' >> comment.txt
+            echo "$ synopkg list-mismatches" >> comment.txt
+            echo "${{ steps.version-mismatches-lint.outputs.stdout }}" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+        fi
+        if [ "${{ inputs.semver-range-mismatches }}" = "lint" ]; then
+          if [ "${{ steps.semver-range-mismatches-lint.outcome }}" = "success" ]; then
+            echo '```' >> comment.txt
+            echo "$ synopkg lint-semver-ranges" >> comment.txt
+            echo "✓" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+          if [ "${{ steps.semver-range-mismatches-lint.outcome }}" = "failure" ]; then
+            echo "" >> comment.txt
+            echo '```' >> comment.txt
+            echo "$ synopkg lint-semver-ranges" >> comment.txt
+            echo "${{ steps.semver-range-mismatches-lint.outputs.stdout }}" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+        fi
+        if [ "${{ inputs.version-mismatches }}" = "fix" ]; then
+          if [ "${{ steps.version-mismatches-fix.outputs.has-changes }}" = "true" ]; then
+            echo "" >> comment.txt
+            echo '```' >> comment.txt
+            echo "$ synopkg fix-mismatches" >> comment.txt
+            echo "${{ steps.version-mismatches-fix.outputs.stdout }}" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+        fi
+        if [ "${{ inputs.format-mismatches }}" = "fix" ]; then
+          if [ "${{ steps.format-mismatches-fix.outputs.has-changes }}" = "true" ]; then
+            echo "" >> comment.txt
+            echo '```' >> comment.txt
+            echo "$ synopkg format" >> comment.txt
+            echo "${{ steps.format-mismatches-fix.outputs.stdout }}" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+        fi
+        if [ "${{ inputs.semver-range-mismatches }}" = "fix" ]; then
+          if [ "${{ steps.semver-range-mismatches-fix.outputs.has-changes }}" = "true" ]; then
+            echo "" >> comment.txt
+            echo '```' >> comment.txt
+            echo "$ synopkg set-semver-ranges" >> comment.txt
+            echo "${{ steps.semver-range-mismatches-fix.outputs.stdout }}" >> comment.txt
+            echo '```' >> comment.txt
+            echo "" >> comment.txt
+          fi
+        fi
+        body=$(cat comment.txt)
+        body="${body//'%'/'%25'}"
+        body="${body//$'\n'/'%0A'}"
+        body="${body//$'\r'/'%0D'}"
+        echo "body="$body"" >> $GITHUB_OUTPUT
+
+    - if: always()
+      name: Find Comment
+      id: find-comment
+      uses: peter-evans/find-comment@v2
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        comment-author: ${{ inputs.bot-username }}
+        body-includes: '<!-- synopkg-bot -->'
+
+    - if: always()
+      name: Upsert Comment
+      id: upsert-comment
+      uses: peter-evans/create-or-update-comment@v2
+      with:
+        comment-id: ${{ steps.find-comment.outputs.comment-id }}
+        issue-number: ${{ github.event.pull_request.number }}
+        edit-mode: replace
+        body: |
+          Synchronise monorepo dependency versions with [`synopkg`](https://github.com/synopkg/synopkg)
+          ${{ steps.get-comment-body.outputs.body }}
+          <!-- synopkg-bot -->
