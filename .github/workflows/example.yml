@@ -57,7 +57,7 @@ jobs:
           semver-range-mismatches: 'fix'
           # Migrate to a newer version of synopkg than was available at the
           # time of writing this GitHub action
-          synopkg-version: '13.0.1'
+          synopkg-version: '13.0.0'
           # How to handle dependencies which are required by multiple packages,
           # where the version is not the same across every package
           #
